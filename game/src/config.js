@@ -10,9 +10,13 @@ export const WORLD = {
   terrainSegments: 224,
   /** The airport's ground height above the sea, in metres. */
   airfieldHeight: 7,
-  /** The airfield's flat disc: level inside `airfieldInner`, blending out to here. */
-  airfieldInner: 420,
-  airfieldOuter: 1150,
+  /** The airfield's flat ground: level inside `airfieldInner`, blending out to here.
+   *  The shelf is an ellipse stretched along the runway, so both approaches are
+   *  clear of the hills and the whole strip lies on level ground. */
+  airfieldInner: 900,
+  airfieldOuter: 1500,
+  /** How much the airfield's shelf is stretched along the runway's axis (Z). */
+  airfieldStretch: 0.62,
   /** The runway: along Z, centred on the origin. */
   runwayLength: 1500,
   runwayWidth: 48,
@@ -21,10 +25,17 @@ export const WORLD = {
   /** Where the sun stands. */
   sunElevation: 0.62,
   sunAzimuth: 2.35,
-  /** Exponential haze that hides the edge of the world. */
-  fogDensity: 0.00019,
-  /** Height above which the peaks keep their snow. */
-  snowLine: 235,
+  /** Exponential haze that hides the edge of the world. Light enough that the
+   *  sea stays the colour of the sea out to the coast. */
+  fogDensity: 0.00013,
+  /** Height above which the peaks keep their snow. The island's summits reach
+   *  454 m, so this leaves the snow as caps on the high ridge and the green
+   *  and the bare rock on the slopes below it. */
+  // The snowline sits above the shoulders of the island and only on its true
+  // summits: the highest ground here reaches 454 metres, so a line at three
+  // hundred covered every hill in sight and the island read as a white sheet
+  // rather than as rock with snow on it.
+  snowLine: 372,
   /** Height above which the shore turns to sand. */
   sandLine: 9,
 };

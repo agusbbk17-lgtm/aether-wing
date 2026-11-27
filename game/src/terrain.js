@@ -9,6 +9,26 @@ import { fbm2, ridged2, smoothstep } from './random.js';
 export const ISLAND_SEED = 20261126;
 
 /**
+ * How far the airfield's level shelf reaches at a point: 1 on the flat ground
+ * under the strip and its approaches, 0 outside it. The shelf is an ellipse
+ * stretched along the runway, so the approaches are clear.
+ * @param {number} x the easting, in metres
+ * @param {number} z the southing, in metres
+ */
+export function shelfBlend(x, z) {
+  return smoothstep(WORLD.airfieldOuter, WORLD.airfieldInner,
+    Math.hypot(x, z * WORLD.airfieldStretch));
+}
+
+/**
+ * The distance from the airfield's centre measured along the shelf's own
+ * ellipse, in metres: the same yardstick the trees and the splat map keep off.
+ */
+export function shelfDistance(x, z) {
+  return Math.hypot(x, z * WORLD.airfieldStretch);
+}
+
+/**
  * The height of the ground, in metres above the sea, at a point in the world.
  * @param {number} x the easting, in metres
  * @param {number} z the southing, in metres
@@ -32,8 +52,10 @@ export function heightAt(x, z, seed = ISLAND_SEED) {
 
   let height = island * (34 + rolling * 300 + ridge * ridgeMask * 430);
 
-  // A shelf for the airfield: level ground near the origin, blending into the hills.
-  const flat = smoothstep(WORLD.airfieldOuter, WORLD.airfieldInner, Math.hypot(x, z));
+  // A shelf for the airfield: level ground under the strip and its approaches,
+  // an ellipse stretched along the runway so the hills do not rise in front of
+  // the threshold, blending into the country beyond.
+  const flat = shelfBlend(x, z);
   height = height * (1 - flat) + WORLD.airfieldHeight * flat;
 
   // The beach: the ground never goes far below the sea, so the coast has a shore.
@@ -63,9 +85,16 @@ export function slopeAt(x, z, seed = ISLAND_SEED) {
  * the shore and snow high on the peaks.
  */
 export function splatWeights(x, z, height, slope, seed = ISLAND_SEED) {
-  const sand = smoothstep(WORLD.sandLine + 12, WORLD.sandLine - 4, height);
+  // The shore is sand; the airfield's shelf is low ground but it is inland, so
+  // the sand rule does not apply to it and it stays mown grass.
+  const shelf = shelfBlend(x, z);
+  const sand = smoothstep(WORLD.sandLine + 12, WORLD.sandLine - 4, height) * (1 - shelf * 0.94);
   const rock = smoothstep(0.24, 0.55, slope) * (1 - sand * 0.6);
-  const snow = smoothstep(WORLD.snowLine, WORLD.snowLine + 90, height) * (1 - rock * 0.45);
+  // Snow lies on the high ground, but not on a face too steep to hold it: the
+  // ramp is narrow so the summits are capped and the shoulders stay rock.
+  const snow = smoothstep(WORLD.snowLine, WORLD.snowLine + 70, height)
+    * (1 - rock * 0.55)
+    * (1 - smoothstep(0.46, 0.82, slope));
   const grass = Math.max(0, 1 - sand - rock - snow);
   const total = grass + rock + sand + snow || 1;
   return { grass: grass / total, rock: rock / total, sand: sand / total, snow: snow / total };
@@ -76,13 +105,13 @@ export function splatWeights(x, z, height, slope, seed = ISLAND_SEED) {
  * apron sit on ground the mesh also shows as flat.
  */
 export function airfieldHeightAt(x, z, seed = ISLAND_SEED) {
-  const flat = smoothstep(WORLD.airfieldOuter, WORLD.airfieldInner, Math.hypot(x, z));
+  const flat = shelfBlend(x, z);
   return heightAt(x, z, seed) * (1 - flat) + WORLD.airfieldHeight * flat;
 }
 
 /** True when the point lies on the airfield's level shelf. */
 export function onAirfield(x, z) {
-  return Math.hypot(x, z) < WORLD.airfieldOuter;
+  return shelfBlend(x, z) > 0;
 }
 
 /**

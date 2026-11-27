@@ -4,8 +4,58 @@
 import * as THREE from '../vendor/three.module.min.js';
 
 /**
+ * The usual smooth ramp, clamped at both ends.
+ */
+function smoothstep(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
  * A ribbon of triangles that is rebuilt every frame from a list of points.
  */
+/**
+ * The fade along a trail: black where the smoke is oldest and white at the
+ * wingtip. Without it the ribbon is one flat band of white, and the oldest end
+ * — which is the end nearest the chase camera — fills the frame.
+ */
+function createFadeTexture() {
+  const columns = 128;
+  const rows = 16;
+  const canvas = document.createElement('canvas');
+  canvas.width = columns;
+  canvas.height = rows;
+  const context = canvas.getContext('2d');
+  // The fade is two-dimensional on purpose. Along the ribbon the smoke thickens
+  // towards the wingtip; across it the alpha falls to nothing at both edges, so
+  // the trail has no straight side to catch the eye. A one-dimensional fade
+  // leaves a hard-edged quad, and from the chase camera those hard edges read
+  // as pale wedges painted over the ground rather than as vapour.
+  const image = context.createImageData(columns, rows);
+  const data = image.data;
+  for (let row = 0; row < rows; row += 1) {
+    const across = Math.abs((row + 0.5) / rows - 0.5) * 2;
+    const edge = 1 - smoothstep(0.28, 1, across);
+    for (let column = 0; column < columns; column += 1) {
+      const along = column / (columns - 1);
+      const value = Math.round(255 * edge * Math.pow(along, 1.7));
+      const at = (row * columns + column) * 4;
+      data[at] = value;
+      data[at + 1] = value;
+      data[at + 2] = value;
+      data[at + 3] = 255;
+    }
+  }
+  context.putImageData(image, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  return texture;
+}
+
 function createRibbon(width, colour, opacity) {
   const positions = new Float32Array(64 * 2 * 3);
   const uvs = new Float32Array(64 * 2 * 2);
@@ -19,6 +69,7 @@ function createRibbon(width, colour, opacity) {
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geometry.setIndex(indices);
   geometry.setDrawRange(0, 0);
+  const fade = createFadeTexture();
   const material = new THREE.MeshBasicMaterial({
     color: colour,
     transparent: true,
@@ -27,18 +78,19 @@ function createRibbon(width, colour, opacity) {
     side: THREE.DoubleSide,
     blending: THREE.NormalBlending,
     fog: true,
+    alphaMap: fade,
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
-  return { mesh, geometry, positions, uvs };
+  return { mesh, geometry, positions, uvs, fade, width };
 }
 
 export function createTrails(quality) {
   const group = new THREE.Group();
   const maxPoints = quality.trailSegments;
   const wings = [
-    { side: -1, ribbon: createRibbon(0.55, 0xf2f6ff, 0.5), points: [] },
-    { side: 1, ribbon: createRibbon(0.55, 0xf2f6ff, 0.5), points: [] },
+    { side: -1, ribbon: createRibbon(0.5, 0xf2f6ff, 0.3), points: [] },
+    { side: 1, ribbon: createRibbon(0.5, 0xf2f6ff, 0.3), points: [] },
   ];
   wings.forEach((wing) => group.add(wing.ribbon.mesh));
 
@@ -81,7 +133,11 @@ export function createTrails(quality) {
           const previous = wing.points[Math.max(0, index - 1)];
           const next = wing.points[Math.min(count - 1, index + 1)];
           const direction = next.clone().sub(previous).normalize();
-          const side = new THREE.Vector3().crossVectors(direction, up).normalize().multiplyScalar(0.28);
+          // The ribbon is widest at the wingtip and thins as the smoke ages,
+          // so it reads as a trail drawn out behind the aeroplane.
+          const age = index / count;
+          const side = new THREE.Vector3().crossVectors(direction, up)
+            .normalize().multiplyScalar(wing.ribbon.width * (0.12 + 0.45 * age));
           const at = index * 6;
           positions[at] = current.x - side.x;
           positions[at + 1] = current.y - side.y;
@@ -89,7 +145,6 @@ export function createTrails(quality) {
           positions[at + 3] = current.x + side.x;
           positions[at + 4] = current.y + side.y;
           positions[at + 5] = current.z + side.z;
-          const age = index / count;
           const uvAt = index * 4;
           uvs[uvAt] = age;
           uvs[uvAt + 1] = 0;
@@ -100,7 +155,7 @@ export function createTrails(quality) {
         wing.ribbon.geometry.attributes.uv.needsUpdate = true;
         wing.ribbon.geometry.setDrawRange(0, (count - 1) * 6);
         // The trail fades as it ages.
-        wing.ribbon.mesh.material.opacity = 0.42 * Math.min(1, count / 12);
+        wing.ribbon.mesh.material.opacity = 0.3 * Math.min(1, count / 14);
       });
     },
   };

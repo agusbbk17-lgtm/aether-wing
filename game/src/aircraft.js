@@ -158,6 +158,33 @@ export function createAircraft(textures) {
   }
   group.add(propeller);
 
+  // The propeller's blur: once it is turning there is nothing to see but a
+  // translucent disc, so the blades are veiled by a disc painted from a radial
+  // gradient. Its veil thickens with the throttle, and never quite hides the
+  // blades at idle.
+  const blurSize = 128;
+  const blurCanvas = document.createElement('canvas');
+  blurCanvas.width = blurSize;
+  blurCanvas.height = blurSize;
+  const blurPaint = blurCanvas.getContext('2d');
+  const veil = blurPaint.createRadialGradient(64, 64, 4, 64, 64, 64);
+  veil.addColorStop(0, 'rgba(150,157,165,0)');
+  veil.addColorStop(0.34, 'rgba(126,133,142,0.16)');
+  veil.addColorStop(0.68, 'rgba(96,103,112,0.30)');
+  veil.addColorStop(0.95, 'rgba(64,70,78,0.42)');
+  veil.addColorStop(1, 'rgba(64,70,78,0)');
+  blurPaint.fillStyle = veil;
+  blurPaint.fillRect(0, 0, blurSize, blurSize);
+  const propBlur = new THREE.Mesh(new THREE.CircleGeometry(1.58, 44), new THREE.MeshBasicMaterial({
+    map: new THREE.CanvasTexture(blurCanvas),
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  }));
+  propBlur.position.set(0, 0.02, -3.79);
+  group.add(propBlur);
+
   // The wings, low and slightly swept.
   const wing = new THREE.Mesh(wingGeometry(10.4, 1.85, 1.05, 0.26, 0.55), skin);
   wing.position.set(0, -0.28, -0.15);
@@ -261,12 +288,15 @@ export function createAircraft(textures) {
   return {
     group,
     propeller,
+    propBlur,
     exhaustGlow,
     lamps,
     surfaces: { aileronLeft, aileronRight, elevator, rudder, flapLeft, flapRight },
     /** Turns the propeller and moves the control surfaces with the pilot's hands. */
     update(flight, axes, delta, throttle) {
-      propeller.rotation.z += delta * (12 + throttle * 62);
+      const spin = 12 + throttle * 62;
+      propeller.rotation.z += delta * spin;
+      propBlur.material.opacity = Math.min(0.92, spin * 0.011);
       const roll = axes.roll;
       aileronLeft.rotation.x = roll * 0.5;
       aileronRight.rotation.x = -roll * 0.5;

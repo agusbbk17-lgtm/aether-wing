@@ -414,12 +414,19 @@ export function boot() {
   // frame that was asked for.
   if (shotMode) {
     window.__aether = {
-      game, flight, mission, scene, camera, renderer, hud, hudCanvas, canvas, world, rig, aircraft, trails, menus,
+      game, flight, scene, camera, renderer, hud, hudCanvas, canvas, world, rig, aircraft, trails, menus,
+      // The sortie is replaced by `startMission`, so the handle must read the
+      // mission that is live now rather than the one that existed at boot.
+      get mission() { return mission; },
       simulate,
       draw,
       startMission,
       beginFlight,
       endMission,
+      /** The throttle lever, so a staged picture can hold a real setting. */
+      setThrottle(value) {
+        input.throttle = value;
+      },
       setScreen(name) {
         game.screen = name;
       },

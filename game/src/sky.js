@@ -44,7 +44,10 @@ export function createSky(quality, sun) {
   group.add(halo);
 
   // --- The clouds: billboards of soft puffs, in a ring around the island, at
-  // the heights the weather would put them.
+  // the heights fair-weather cumulus build at. They are kept out over the sea,
+  // beyond the coast, and their bases above the highest ring of the course: a
+  // cloud that hung between the aeroplane and the island would veil the ground
+  // instead of giving the horizon its depth.
   const cloudTexture = createCloudTexture();
   const cloudMaterial = new THREE.SpriteMaterial({
     map: cloudTexture.map,
@@ -59,12 +62,16 @@ export function createSky(quality, sun) {
     const material = cloudMaterial.clone();
     const sprite = new THREE.Sprite(material);
     const angle = (index / cloudCount) * Math.PI * 2 + Math.sin(index * 12.9898) * 0.6;
-    const radius = 2600 + ((index * 7919) % 9000);
-    const height = 620 + ((index * 104729) % 900);
+    // The deck is held well out from the course and well above it: the widest
+    // the flight gets is about 2.9 kilometres from the island's centre and the
+    // rings top out at 645 metres, so a cloud nearer than this or lower would
+    // hang between the aeroplane and the ground and veil the island.
+    const radius = 5200 + ((index * 7919) % 7600);
+    const height = 1650 + ((index * 104729) % 700);
     sprite.position.set(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
-    const scale = 900 + ((index * 31337) % 1500);
-    sprite.scale.set(scale, scale * 0.52, 1);
-    material.opacity = 0.55 + ((index * 17) % 40) / 100;
+    const scale = 1000 + ((index * 31337) % 1400);
+    sprite.scale.set(scale, scale * 0.45, 1);
+    material.opacity = 0.3 + ((index * 17) % 26) / 100;
     group.add(sprite);
     clouds.push({ sprite, speed: 0.55 + ((index * 61) % 100) / 100 });
   }

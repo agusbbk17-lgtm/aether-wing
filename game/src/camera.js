@@ -107,8 +107,20 @@ export function createCameraRig(camera) {
       ).normalize();
       right.set(Math.cos(flight.state.heading), 0, Math.sin(flight.state.heading)).normalize();
       up.crossVectors(right, forward).normalize();
-      state.position.copy(position).addScaledVector(forward, -state.distance).addScaledVector(up, 4.6);
-      state.lookAt.copy(position);
+      if (state.view === VIEW.COCKPIT) {
+        // The pilot's eye, placed at once so a held view does not swing in.
+        state.position.copy(position).addScaledVector(forward, 0.9).addScaledVector(up, 0.62);
+        state.lookAt.copy(position).addScaledVector(forward, 60).addScaledVector(up, 1.4);
+        state.fov = 68 + Math.min(10, flight.state.velocity.length() * 0.09);
+        camera.fov = state.fov;
+        camera.updateProjectionMatrix();
+      } else {
+        state.position.copy(position).addScaledVector(forward, -state.distance).addScaledVector(up, 4.6);
+        state.lookAt.copy(position).addScaledVector(forward, 12).addScaledVector(up, 1.2);
+        state.fov = 60 + Math.min(14, flight.state.velocity.length() * 0.13);
+        camera.fov = state.fov;
+        camera.updateProjectionMatrix();
+      }
       camera.position.copy(state.position);
       camera.lookAt(state.lookAt);
     },

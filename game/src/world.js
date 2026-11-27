@@ -5,7 +5,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { PALETTE, WORLD } from './config.js';
 import { createRandom, hash2, smoothstep } from './random.js';
-import { airfieldHeightAt, createShorelineMask, heightAt, ISLAND_SEED, slopeAt, splatWeights } from './terrain.js';
+import { airfieldHeightAt, createShorelineMask, heightAt, ISLAND_SEED, shelfDistance, slopeAt, splatWeights } from './terrain.js';
 import { createGroundTextures, createWaterTextures } from './textures.js';
 
 /**
@@ -19,11 +19,16 @@ const TERRAIN_VERTEX = `
   varying vec4 vSplat;
   varying float vDetail;
   varying vec3 vWorld;
+  varying vec3 vNormal;
   varying vec2 vUv;
   void main() {
     vSplat = splat;
     vDetail = detail;
     vUv = uv;
+    // The mesh's own normal, in world space: the ground's real slope, which
+    // the normal maps then bend. Without it the shading would have nothing to
+    // stand on and every hill would read as flat.
+    vNormal = normalize(mat3(modelMatrix) * normal);
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
     gl_Position = projectionMatrix * viewMatrix * world;
@@ -55,6 +60,7 @@ const TERRAIN_FRAGMENT = `
   varying float vDetail;
   varying vec3 vWorld;
   varying vec2 vUv;
+  varying vec3 vNormal;
 
   void main() {
     vec2 uv = vUv * 120.0;
@@ -63,24 +69,52 @@ const TERRAIN_FRAGMENT = `
     vec4 sand = texture2D(sandMap, uv * 0.9);
     vec4 snow = texture2D(snowMap, uv * 0.7);
 
-    vec3 albedo = grass.rgb * vSplat.x + rock.rgb * vSplat.y + sand.rgb * vSplat.z + snow.rgb * vSplat.w;
-    float roughness = texture2D(grassRough, uv).g * vSplat.x + texture2D(rockRough, uv * 0.8).g * vSplat.y + texture2D(sandRough, uv * 0.9).g * vSplat.z + texture2D(snowRough, uv * 0.7).g * vSplat.w;
+    // The splat weights ride on the mesh's vertices, forty metres apart, so a
+    // boundary carried only by them reads as a soft smear across the hillside.
+    // It is broken up by a coarse blotch of the snow's own roughness map, which
+    // moves the line along the ground's real relief and leaves the middle of
+    // each layer untouched.
+    vec4 weights = vSplat;
+    float blotch = texture2D(snowRough, vUv * 26.0).g - 0.5;
+    float edge = 4.0 * weights.w * (1.0 - weights.w);
+    weights.w = clamp(weights.w + blotch * 1.7 * edge, 0.0, 1.0);
+    weights.x = max(0.0, 1.0 - weights.y - weights.z - weights.w);
+
+    vec3 albedo = grass.rgb * weights.x + rock.rgb * weights.y + sand.rgb * weights.z + snow.rgb * weights.w;
+    float roughness = texture2D(grassRough, uv).g * weights.x + texture2D(rockRough, uv * 0.8).g * weights.y + texture2D(sandRough, uv * 0.9).g * weights.z + texture2D(snowRough, uv * 0.7).g * weights.w;
 
     // The detail normal: a second, finer set of normals that keeps the ground
-    // sharp when the camera is close to it.
+    // sharp when the camera is close to it. Its weight rises near the eye, so
+    // the ground under the aeroplane never relaxes into a flat colour.
+    float nearEye = 1.0 - clamp((length(vWorld - cameraPosition) - 260.0) / 1500.0, 0.0, 1.0);
+    float detailStrength = vDetail + nearEye * 0.55;
     vec2 detailUv = vUv * 900.0;
     vec3 detailNormal = texture2D(grassNormal, detailUv).xyz * 2.0 - 1.0;
     vec3 grassN = texture2D(grassNormal, uv).xyz * 2.0 - 1.0;
     vec3 rockN = texture2D(rockNormal, uv * 0.8).xyz * 2.0 - 1.0;
     vec3 sandN = texture2D(sandNormal, uv * 0.9).xyz * 2.0 - 1.0;
     vec3 snowN = texture2D(snowNormal, uv * 0.7).xyz * 2.0 - 1.0;
-    vec3 normal = normalize(
-      grassN * vSplat.x + rockN * vSplat.y + sandN * vSplat.z + snowN * vSplat.w + detailNormal * vDetail * 0.35);
+    vec3 bend = normalize(
+      grassN * weights.x + rockN * weights.y + sandN * weights.z + snowN * weights.w + detailNormal * detailStrength * 0.4);
+
+    // The frame the maps are painted in follows the ground's own layout: the
+    // terrain is built along X and Z, so the map's axes are the world's,
+    // squared off against the slope the mesh actually has.
+    vec3 surface = normalize(vNormal);
+    vec3 helper = abs(surface.y) > 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    vec3 tangent = normalize(cross(helper, surface));
+    vec3 bitangent = cross(surface, tangent);
+    vec3 normal = normalize(tangent * bend.x + bitangent * bend.y + surface * max(0.4, bend.z));
 
     vec3 lightDirection = normalize(sunDirection);
     float diffuse = max(dot(normal, lightDirection), 0.0);
-    float ambient = 0.42 + 0.18 * normal.y;
-    vec3 color = albedo * (sunColor * diffuse * 1.25 + skyColor * ambient * 0.55 + groundColor * ambient * 0.2);
+    // A shaded slope still faces the sky, so it keeps a fill light: dim, never
+    // black. The snow and the wet rock take a sheen along the sun's direction.
+    float ambient = 0.34 + 0.26 * max(0.0, normal.y);
+    vec3 color = albedo * (sunColor * diffuse * 1.35 + skyColor * ambient * 0.7 + groundColor * ambient * 0.25);
+    vec3 toEye = normalize(cameraPosition - vWorld);
+    float sheen = pow(max(dot(reflect(-lightDirection, normal), toEye), 0.0), 24.0);
+    color += sunColor * sheen * (0.03 + 0.22 * (1.0 - roughness));
 
     // The haze, at the same density as the scene's fog.
     // The haze: an exponential falloff with distance, so the far side of the
@@ -123,22 +157,42 @@ const WATER_FRAGMENT = `
   varying vec2 vUv;
 
   void main() {
-    vec2 uvA = vWorld.xz * 0.012 + vec2(time * 0.011, time * 0.007);
-    vec2 uvB = vWorld.xz * 0.035 - vec2(time * 0.017, time * 0.013);
+    vec3 view = normalize(cameraPosition - vWorld);
+    float range = length(vWorld - cameraPosition);
+    vec3 light = normalize(sunDirection);
+
+    // The sea stands shallow over the bank that rings the island and deep
+    // beyond it, which is what gives the coast its turquoise ring. It is read
+    // from how far the point lies from the island's centre: the water's own
+    // height is the same everywhere on a flat sea, so it carries no news.
+    float shelf = 1.0 - smoothstep(3100.0, 6600.0, length(vWorld.xz));
+
+    // Two sets of ripples scroll across each other. They are chopped down as
+    // the eye lays flatter on the water and as the water falls away: the same
+    // normals read at a grazing angle beat into bands across the whole sea, and
+    // a far sea is calm water in any case.
+    float chop = smoothstep(0.1, 0.55, max(view.y, 0.0))
+      * (1.0 - 0.8 * smoothstep(900.0, 4500.0, range));
+    vec2 uvA = vWorld.xz * 0.006 + vec2(time * 0.011, time * 0.007);
+    vec2 uvB = vWorld.xz * 0.016 - vec2(time * 0.017, time * 0.013);
     vec3 normalA = texture2D(normalMap, uvA).xyz * 2.0 - 1.0;
     vec3 normalB = texture2D(normalMap, uvB).xyz * 2.0 - 1.0;
-    vec3 normal = normalize(vec3(normalA.x + normalB.x, 6.0, normalA.y + normalB.y));
+    vec3 normal = normalize(vec3(
+      (normalA.x + normalB.x * 0.55) * chop, 6.0, (normalA.y + normalB.y * 0.55) * chop));
+    float roughness = texture2D(roughnessMap, uvA).g;
 
-    vec3 view = normalize(cameraPosition - vWorld);
-    vec3 light = normalize(sunDirection);
+    // Sea water is dark and only thinly reflective. The sky is mirrored by a
+    // Fresnel term held to water's own reflectivity, so the surface keeps its
+    // colour out at the horizon instead of washing into a pale sheet.
+    float facing = max(dot(normal, view), 0.0);
+    float fresnel = 0.02 + 0.98 * pow(1.0 - facing, 5.0);
     vec3 halfway = normalize(view + light);
-    float specular = pow(max(dot(normal, halfway), 0.0), 220.0);
-    float fresnel = pow(1.0 - max(dot(normal, view), 0.0), 4.0);
+    float glint = pow(max(dot(normal, halfway), 0.0), 300.0) * (1.2 - roughness);
 
-    // The sea is shallower over the island's shelf.
-    float shelf = smoothstep(-260.0, 40.0, vWorld.y);
-    vec3 base = mix(deepColor, shallowColor, shelf * 0.75 + 0.1);
-    vec3 color = base + sunColor * specular * 1.7 + vec3(0.55, 0.68, 0.78) * fresnel * 0.6;
+    vec3 base = mix(deepColor, shallowColor, 0.08 + shelf * 0.72);
+    vec3 color = base * (0.78 + 0.22 * max(light.y, 0.0));
+    color = mix(color, fogColor, fresnel * 0.22);
+    color += sunColor * glint * 0.9;
 
     // The foam line: where the waves break on the sand. The mask says how
     // close the shore is, and the ripples along it move with the swell.
@@ -147,15 +201,18 @@ const WATER_FRAGMENT = `
     if (shoreUv.x > 0.0 && shoreUv.x < 1.0 && shoreUv.y > 0.0 && shoreUv.y < 1.0) {
       shore = texture2D(shoreMask, shoreUv).r;
     }
-    float swell = sin(vWorld.x * 0.02 + vWorld.z * 0.014 + time * 1.6) * 0.5 + 0.5;
-    float foam = smoothstep(0.35, 0.95, shore * (0.65 + swell * 0.55));
-    foam *= smoothstep(-6.0, 2.0, vWorld.y);
-    color = mix(color, vec3(0.91, 0.96, 0.97), foam * 0.85);
+    // The break only shows where the bank is shallow under it, and only within
+    // a couple of kilometres of the eye: a swell of this wavelength sampled
+    // across a long, flat sea folds into bands that run right out to the
+    // horizon, which reads as a screen artefact rather than as surf.
+    float swell = sin(vWorld.x * 0.008 + vWorld.z * 0.006 + time * 1.6) * 0.5 + 0.5;
+    float foam = smoothstep(0.5, 0.98, shore * (0.72 + swell * 0.28));
+    foam *= smoothstep(0.04, 0.4, shelf) * (1.0 - smoothstep(1100.0, 4200.0, range));
+    color = mix(color, vec3(0.91, 0.96, 0.97), foam * 0.7);
 
     // The haze: an exponential falloff with distance, so the far side of the
     // island softens but the ground under the aeroplane stays crisp.
-    float distance = length(vWorld - cameraPosition);
-    float fog = 1.0 - exp(-fogDensity * fogDensity * distance * distance);
+    float fog = 1.0 - exp(-fogDensity * fogDensity * range * range);
     color = mix(color, fogColor, clamp(fog, 0.0, 1.0));
 
     gl_FragColor = vec4(color, 1.0);
@@ -446,8 +503,8 @@ export function createWorld(quality, renderer) {
     if (height < 12 || height > WORLD.snowLine - 20) continue;
     const slope = slopeAt(x, z, seed);
     if (slope > 0.42) continue;
-    // Keep the trees off the airfield.
-    if (Math.hypot(x, z) < WORLD.airfieldOuter + 120) continue;
+    // Keep the trees off the airfield and its approaches.
+    if (shelfDistance(x, z) < WORLD.airfieldOuter + 120) continue;
     const distance = Math.hypot(x, z);
     if (distance > quality.treeDistance) continue;
     const size = 0.72 + random() * 0.85;
